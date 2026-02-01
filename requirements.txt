@@ -1,0 +1,9 @@
+transformers
+langchain
+langchain-huggingface
+torch
+llama-index-core
+llama-index-llms-huggingface
+llama-index-embeddings-huggingface
+llama-index-readers-database
+psycopg2-binary
