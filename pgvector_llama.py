@@ -1,9 +1,10 @@
 import configparser
 import os
 import sys
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from llama_index.core import SQLDatabase, Settings
 from llama_index.llms.huggingface import HuggingFaceLLM
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.query_engine import NLSQLTableQueryEngine
 from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.core.agent import ReActAgent
@@ -25,6 +26,26 @@ db_name = "postgres" # Standard default database
 
 # 2. Setup Database
 engine = create_engine(f"postgresql+psycopg2://{user}:{password}@localhost/{db_name}")
+
+# Debug: Check if table exists before creating SQLDatabase
+try:
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"))
+        tables = [row[0] for row in result]
+        print(f"Available tables: {tables}")
+        
+        if table_name not in tables:
+            print(f"Error: Table '{table_name}' not found in database '{db_name}'")
+            print(f"Available tables: {tables}")
+            sys.exit(1)
+        else:
+            print(f"Found table: {table_name}")
+            
+except Exception as e:
+    print(f"Database connection error: {e}")
+    sys.exit(1)
+
 sql_database = SQLDatabase(engine, include_tables=[table_name])
 
 # 3. Setup LLM (Local)
@@ -33,21 +54,20 @@ hf_token = os.environ.get("HF_TOKEN")
 if not hf_token and 'huggingface' in config:
     hf_token = config['huggingface']['api_key']
 
-# Initialize Native Local HuggingFaceLLM
+# Initialize Native Local HuggingFaceLLM with a model good for code/SQL
 print("Loading model locally... This may take a moment.")
 llm = HuggingFaceLLM(
-    model_name="meta-llama/Meta-Llama-3-8B-Instruct",
-    tokenizer_name="meta-llama/Meta-Llama-3-8B-Instruct",
-    context_window=4096,
+    model_name="Salesforce/codegen-350M-mono",  # Good for code generation, no auth needed
+    tokenizer_name="Salesforce/codegen-350M-mono",
+    context_window=2048,
     max_new_tokens=256,
     generate_kwargs={"temperature": 0.1, "do_sample": False},
     device_map="auto", # Should detect mps on Mac
-    model_kwargs={"token": hf_token},
-    tokenizer_kwargs={"token": hf_token},
 )
 
 # Set global settings (optional, but good practice)
 Settings.llm = llm
+Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 # 4. Create Query Engine Tool
 query_engine = NLSQLTableQueryEngine(
@@ -64,11 +84,8 @@ sql_tool = QueryEngineTool(
     )
 )
 
-# 5. Initialize Agent
-agent = ReActAgent.from_tools([sql_tool], llm=llm, verbose=True)
-
-# 6. Interactive Loop
-print(f"Agent initialized with Llama 3 8B and Postgres table '{table_name}'.")
+# 5. Skip Agent for now - use query engine directly
+print(f"Query engine initialized with CodeGen and Postgres table '{table_name}'.")
 print("Ask a question (or type 'exit' to quit):")
 
 while True:
@@ -78,8 +95,8 @@ while True:
             print("Goodbye!")
             break
         
-        response = agent.chat(user_input)
-        print(f"Agent: {response}")
+        response = query_engine.query(user_input)
+        print(f"Response: {response}")
         
     except KeyboardInterrupt:
         print("\nExiting...")
